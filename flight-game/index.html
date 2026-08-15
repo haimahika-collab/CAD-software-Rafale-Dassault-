@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Fighter Jet Flight</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #87CEEB; font-family: -apple-system, sans-serif; }
+  #container { position: relative; width: 100%; height: 640px; }
+  canvas { display: block; width: 100%; height: 100%; }
+
+  #overlay {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(10, 15, 30, 0.75);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    color: white; text-align: center; z-index: 10;
+  }
+  #overlay h1 { font-size: 28px; font-weight: 600; margin: 0 0 8px; }
+  #overlay p { font-size: 14px; color: #cfd8e3; margin: 4px 0; line-height: 1.6; max-width: 380px; }
+  #launchBtn {
+    margin-top: 20px; padding: 12px 32px; font-size: 16px; font-weight: 600;
+    background: #e04a3f; color: white; border: none; border-radius: 8px; cursor: pointer;
+  }
+  #launchBtn:hover { background: #c73f35; }
+  #launchBtn:active { transform: scale(0.97); }
+
+  #hud {
+    position: absolute; top: 16px; left: 16px; color: white; font-size: 13px;
+    background: rgba(0,0,0,0.35); padding: 10px 14px; border-radius: 8px; line-height: 1.8;
+    display: none; pointer-events: none;
+  }
+  #hud .label { color: #a9b6c9; margin-right: 6px; }
+  #hud .val { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  #resetHint {
+    position: absolute; bottom: 14px; left: 16px; color: rgba(255,255,255,0.75);
+    font-size: 12px; background: rgba(0,0,0,0.3); padding: 6px 10px; border-radius: 6px;
+    display: none; pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div id="container">
+  <div id="overlay">
+    <h1>Ready for takeoff</h1>
+    <p>Hold <b>Space</b> to throttle up and accelerate down the runway. Once you're fast enough, use the arrow keys (or W/A/S/D) to pitch and roll into the air.</p>
+    <p><b>Up/Down</b> — pitch &nbsp; <b>Left/Right</b> — roll &nbsp; <b>Shift</b> — throttle down &nbsp; <b>R</b> — reset</p>
+    <button id="launchBtn">Launch</button>
+  </div>
+  <div id="hud">
+    <div><span class="label">Speed</span><span class="val" id="speedVal">0</span> km/h</div>
+    <div><span class="label">Altitude</span><span class="val" id="altVal">0</span> m</div>
+    <div><span class="label">Throttle</span><span class="val" id="throttleVal">0</span>%</div>
+  </div>
+  <div id="resetHint">Press R to reset if you crash or fly too far</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const container = document.getElementById('container');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x8fc7ea);
+scene.fog = new THREE.Fog(0x8fc7ea, 400, 2200);
+
+const camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 5000);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(container.clientWidth, container.clientHeight);
+container.insertBefore(renderer.domElement, document.getElementById('overlay'));
+
+const ambient = new THREE.AmbientLight(0xffffff, 0.65);
+scene.add(ambient);
+const sun = new THREE.DirectionalLight(0xffffff, 0.85);
+sun.position.set(200, 400, 100);
+scene.add(sun);
+
+const groundGeo = new THREE.PlaneGeometry(20000, 20000);
+const groundMat = new THREE.MeshStandardMaterial({ color: 0x4a7c3c });
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = 0;
+scene.add(ground);
+
+const runwayGeo = new THREE.PlaneGeometry(30, 400);
+const runwayMat = new THREE.MeshStandardMaterial({ color: 0x555555 });
+const runway = new THREE.Mesh(runwayGeo, runwayMat);
+runway.rotation.x = -Math.PI / 2;
+runway.position.set(0, 0.05, -150);
+scene.add(runway);
+
+for (let i = 0; i < 10; i++) {
+  const stripe = new THREE.Mesh(new THREE.PlaneGeometry(2, 12), new THREE.MeshStandardMaterial({ color: 0xffffff }));
+  stripe.rotation.x = -Math.PI / 2;
+  stripe.position.set(0, 0.06, -20 - i * 35);
+  scene.add(stripe);
+}
+
+function makeCloud(x, y, z) {
+  const group = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 });
+  for (let i = 0; i < 5; i++) {
+    const s = new THREE.Mesh(new THREE.SphereGeometry(12 + Math.random() * 10, 8, 8), mat);
+    s.position.set((Math.random() - 0.5) * 40, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 20);
+    group.add(s);
+  }
+  group.position.set(x, y, z);
+  return group;
+}
+for (let i = 0; i < 14; i++) {
+  scene.add(makeCloud((Math.random() - 0.5) * 3000, 150 + Math.random() * 250, (Math.random() - 0.5) * 3000 - 500));
+}
+
+function buildAircraft() {
+  const group = new THREE.Group();
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x5a6068 });
+  const darkMat = new THREE.MeshStandardMaterial({ color: 0x1a1c1f });
+  const canopyMat = new THREE.MeshStandardMaterial({ color: 0x2a5570, transparent: true, opacity: 0.75 });
+  const glowMat = new THREE.MeshBasicMaterial({ color: 0xff8a3d });
+
+  const fuselage = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.55, 6, 10), bodyMat);
+  fuselage.rotation.x = Math.PI / 2;
+  group.add(fuselage);
+
+  const nose = new THREE.Mesh(new THREE.ConeGeometry(0.35, 1.4, 10), bodyMat);
+  nose.rotation.x = -Math.PI / 2;
+  nose.position.z = -3.7;
+  group.add(nose);
+
+  const canopy = new THREE.Mesh(new THREE.SphereGeometry(0.4, 10, 8, 0, Math.PI * 2, 0, Math.PI / 2), canopyMat);
+  canopy.scale.set(1, 0.8, 1.8);
+  canopy.position.set(0, 0.45, -1.2);
+  group.add(canopy);
+
+  function wingShape(rootChord, tipChord, span, sweep) {
+    const shape = new THREE.Shape();
+    shape.moveTo(0, 0);
+    shape.lineTo(0, -rootChord);
+    shape.lineTo(span, -rootChord + sweep + tipChord);
+    shape.lineTo(span, -rootChord + sweep);
+    shape.lineTo(0, 0);
+    return new THREE.ExtrudeGeometry(shape, { depth: 0.08, bevelEnabled: false });
+  }
+
+  const wingGeo = wingShape(3.2, 1.0, 3.6, 2.0);
+  const wingR = new THREE.Mesh(wingGeo, bodyMat);
+  wingR.rotation.x = -Math.PI / 2;
+  wingR.position.set(0.35, -0.05, 1.6);
+  group.add(wingR);
+  const wingL = new THREE.Mesh(wingGeo, bodyMat);
+  wingL.rotation.x = -Math.PI / 2;
+  wingL.scale.x = -1;
+  wingL.position.set(-0.35, -0.05, 1.6);
+  group.add(wingL);
+
+  const canardGeo = wingShape(1.0, 0.4, 1.1, 0.7);
+  const canardR = new THREE.Mesh(canardGeo, bodyMat);
+  canardR.rotation.x = -Math.PI / 2;
+  canardR.position.set(0.3, 0.05, -2.4);
+  group.add(canardR);
+  const canardL = new THREE.Mesh(canardGeo, bodyMat);
+  canardL.rotation.x = -Math.PI / 2;
+  canardL.scale.x = -1;
+  canardL.position.set(-0.3, 0.05, -2.4);
+  group.add(canardL);
+
+  const finShape = new THREE.Shape();
+  finShape.moveTo(0, 0);
+  finShape.lineTo(0, 1.6);
+  finShape.lineTo(1.4, 1.0);
+  finShape.lineTo(1.8, 0);
+  finShape.lineTo(0, 0);
+  const finGeo = new THREE.ExtrudeGeometry(finShape, { depth: 0.08, bevelEnabled: false });
+  const fin = new THREE.Mesh(finGeo, darkMat);
+  fin.rotation.y = Math.PI / 2;
+  fin.position.set(-0.04, 0.35, 2.6);
+  group.add(fin);
+
+  const glowR = new THREE.Mesh(new THREE.CircleGeometry(0.3, 10), glowMat);
+  glowR.position.set(0.15, 0, 3.02);
+  group.add(glowR);
+  const glowL = new THREE.Mesh(new THREE.CircleGeometry(0.3, 10), glowMat);
+  glowL.position.set(-0.15, 0, 3.02);
+  group.add(glowL);
+
+  return group;
+}
+
+const aircraft = buildAircraft();
+scene.add(aircraft);
+
+const START_POS = new THREE.Vector3(0, 1.2, 30);
+const state = {
+  pos: START_POS.clone(),
+  pitch: 0, roll: 0, yaw: 0,
+  speed: 0, throttle: 0,
+  launched: false,
+};
+
+function resetAircraft() {
+  state.pos.copy(START_POS);
+  state.pitch = 0; state.roll = 0; state.yaw = 0;
+  state.speed = 0; state.throttle = 0;
+  aircraft.position.copy(state.pos);
+  aircraft.rotation.set(0, 0, 0);
+}
+resetAircraft();
+
+const keys = {};
+window.addEventListener('keydown', (e) => {
+  keys[e.key] = true;
+  if (e.key === ' ') e.preventDefault();
+  if (e.key.toLowerCase() === 'r') resetAircraft();
+});
+window.addEventListener('keyup', (e) => { keys[e.key] = false; });
+
+document.getElementById('launchBtn').addEventListener('click', () => {
+  document.getElementById('overlay').style.display = 'none';
+  document.getElementById('hud').style.display = 'block';
+  document.getElementById('resetHint').style.display = 'block';
+  state.launched = true;
+});
+
+const MAX_SPEED = 60;
+const ACCEL = 22;
+const DRAG = 6;
+const TAKEOFF_SPEED = 18;
+const GRAVITY = 9.8;
+
+let lastTime = performance.now();
+function animate() {
+  requestAnimationFrame(animate);
+  const now = performance.now();
+  const dt = Math.min((now - lastTime) / 1000, 0.05);
+  lastTime = now;
+
+  if (state.launched) {
+    if (keys[' ']) state.throttle = Math.min(state.throttle + dt * 0.8, 1);
+    if (keys['Shift']) state.throttle = Math.max(state.throttle - dt * 0.8, 0);
+
+    state.speed += (state.throttle * ACCEL - DRAG * (state.speed / MAX_SPEED)) * dt;
+    state.speed = Math.max(0, Math.min(state.speed, MAX_SPEED));
+
+    const onGround = state.pos.y <= 1.25;
+    const canControl = !onGround || state.speed > TAKEOFF_SPEED * 0.6;
+
+    if (canControl) {
+      const pitchInput = (keys['ArrowUp'] || keys['w'] || keys['W'] ? 1 : 0) - (keys['ArrowDown'] || keys['s'] || keys['S'] ? 1 : 0);
+      const rollInput = (keys['ArrowRight'] || keys['d'] || keys['D'] ? 1 : 0) - (keys['ArrowLeft'] || keys['a'] || keys['A'] ? 1 : 0);
+      state.pitch += pitchInput * 0.9 * dt;
+      state.roll += rollInput * 1.6 * dt;
+      state.roll *= 0.96;
+      state.pitch = Math.max(-0.9, Math.min(0.9, state.pitch));
+    }
+
+    // banking couples into a yaw rate, like a real coordinated turn --
+    // this is what actually lets the player steer left/right
+    state.yaw -= state.roll * 0.5 * dt;
+
+    // single source of truth for orientation: set it once, then derive the
+    // forward vector from that SAME rotation object, so the aircraft always
+    // flies exactly the way it's visually pointing
+    aircraft.rotation.set(state.pitch, state.yaw, state.roll);
+    const forward = new THREE.Vector3(0, 0, -1).applyEuler(aircraft.rotation);
+    const speedUnitsPerSec = state.speed * 3;
+
+    if (onGround && state.speed < TAKEOFF_SPEED) {
+      state.pos.x += forward.x * speedUnitsPerSec * dt;
+      state.pos.z += forward.z * speedUnitsPerSec * dt;
+      state.pos.y = 1.2;
+      state.pitch *= 0.9;
+    } else {
+      state.pos.x += forward.x * speedUnitsPerSec * dt;
+      state.pos.z += forward.z * speedUnitsPerSec * dt;
+      const lift = (state.speed * state.speed) / (MAX_SPEED * MAX_SPEED) * (GRAVITY * 1.35);
+      const verticalRate = forward.y * speedUnitsPerSec + (lift - GRAVITY) * 0.6;
+      state.pos.y += verticalRate * dt;
+      if (state.pos.y < 1.2) { state.pos.y = 1.2; state.speed *= 0.85; }
+    }
+
+    aircraft.position.copy(state.pos);
+
+    const camOffset = new THREE.Vector3(0, 3.2, 11).applyEuler(new THREE.Euler(0, state.yaw, 0));
+    const desiredCamPos = state.pos.clone().add(camOffset);
+    camera.position.lerp(desiredCamPos, 1 - Math.pow(0.001, dt));
+    const lookTarget = state.pos.clone().add(new THREE.Vector3(0, 1, 0));
+    camera.lookAt(lookTarget);
+
+    document.getElementById('speedVal').textContent = Math.round(state.speed * 22);
+    document.getElementById('altVal').textContent = Math.round(Math.max(0, state.pos.y - 1.2) * 3);
+    document.getElementById('throttleVal').textContent = Math.round(state.throttle * 100);
+  } else {
+    camera.position.set(START_POS.x + 12, START_POS.y + 5, START_POS.z + 12);
+    camera.lookAt(START_POS.x, START_POS.y, START_POS.z);
+  }
+
+  renderer.render(scene, camera);
+}
+animate();
+
+window.addEventListener('resize', () => {
+  camera.aspect = container.clientWidth / container.clientHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(container.clientWidth, container.clientHeight);
+});
+</script>
+</body>
+</html>
